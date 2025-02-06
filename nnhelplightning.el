@@ -6,13 +6,19 @@
 
 (gnus-declare-backend "nnhelplightning" 'post)
 
+(defvar nnhelplightning-instance-url nil)
+(defvar nnhelplightning-api-key nil)
+(defvar nnhelplightning-pat nil)
 
-(defcustom nnhelplightning-pat nil
-  "Help Lightning Auth PAT"
-  :type 'string)
+;; environments
+(defvar nnhelplightning-environments
+      '((us . ((instance-url . "https://api.helplightning.net")
+               (api-key . "cuvqrnf3z2z1ngtvtxfonhdrues5dz09")))
+        (eu . ((instance-url . "https://api.eu1.helplightning.net")
+               (api-key . "tmr6chpcbvbiwgtsys9isdjrn2txut09")))
+        (dev . ((instance-url . "https://api.dev.helplightning.net")
+               (api-key . "eejxvctmn0hkbm1unzrhyk5nejnhzz09")))))
 
-(defvar nnhelplightning-instance-url "https://api.helplightning.net")
-(defvar nnhelplightning-api-key "cuvqrnf3z2z1ngtvtxfonhdrues5dz09")
 
 (defvar nnhelplightning-token nil "Our authentication token")
 (defvar nnhelplightning-expiration nil "The expiration time of the token")
@@ -95,32 +101,23 @@
   If the server is opened already, this function should return a
   non-nil value. There should be no data returned.
   "
-  (message "nnhelplightning-open-server: Connecting to helplightning server %s..." server)
+  (message "nnhelplightning-open-server: Connecting to helplightning server %s defs: %s..." server defs)
 
-  (let ((url (format "%s/api/v1r1/auth/pat" nnhelplightning-instance-url))
-        (token nnhelplightning-pat)
-        (api-key nnhelplightning-api-key)
-        (response-token nil))
-    (request
-      url
-      :type "POST"
-      :headers `(("Content-Type" . "application/json")
-                 ("x-helplightning-api-key" . ,api-key))
-      :data (json-encode `(("token" . ,token)))
-      :parser 'json-read
-      :sync t
-      :success (cl-function
-                (lambda (&key data &allow-other-keys)
-                  (setq response-token (alist-get 'token data))))
-      :error (cl-function
-              (lambda (&key error-thrown &allow-other-keys)
-                (message "Error: %s" error-thrown))))
+  ;; look at the defs and pull out the environment
+  ;; make sure it is valid, then set everything up
+  (let* ((environment (alist-get 'environment defs))
+         (pat (alist-get 'pat defs))
+         (env (assoc environment nnhelplightning-environments)))
+    (if env
+        (let* ((env-info (cdr env))
+               (url (alist-get 'instance-url env-info))
+               (api-key (alist-get 'api-key env-info)))
+          (setq nnhelplightning-instance-url url)
+          (setq nnhelplightning-api-key api-key)
+          (setq nnhelplightning-pat pat)
 
-    ;; set the response-token
-    (setq nnhelplightning-token response-token)
-    (set-expiration))
-  
-  t) ;; Return t to indicate success
+          (connect-server))
+      (error "Error: Environment '%s' not found!" environment))))
 
 (defun nnhelplightning-close-server ()
   "Close the connection to the helplightning backend server.
@@ -672,6 +669,32 @@ a no-op on most back ends.
 ;;
 ;; Internal functions
 ;;
+
+(defun connect-server ()
+  (let ((url (format "%s/api/v1r1/auth/pat" nnhelplightning-instance-url))
+        (token nnhelplightning-pat)
+        (api-key nnhelplightning-api-key)
+        (response-token nil))
+    (request
+      url
+      :type "POST"
+      :headers `(("Content-Type" . "application/json")
+                 ("x-helplightning-api-key" . ,api-key))
+      :data (json-encode `(("token" . ,token)))
+      :parser 'json-read
+      :sync t
+      :success (cl-function
+                (lambda (&key data &allow-other-keys)
+                  (setq response-token (alist-get 'token data))))
+      :error (cl-function
+              (lambda (&key error-thrown &allow-other-keys)
+                (message "Error: %s" error-thrown))))
+
+    ;; set the response-token
+    (setq nnhelplightning-token response-token)
+    (set-expiration))
+  
+  t) ;; Return t to indicate success
 
 (defun set-expiration ()
   "Set `nnhelplightning-expiration` to the current time + 10 minutes."
