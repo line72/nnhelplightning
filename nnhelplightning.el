@@ -6,9 +6,9 @@
 
 (gnus-declare-backend "nnhelplightning" 'post)
 
-(defvar nnhelplightning-instance-url nil)
-(defvar nnhelplightning-api-key nil)
-(defvar nnhelplightning-pat nil)
+;; (defvar nnhelplightning-instance-url nil)
+;; (defvar nnhelplightning-api-key nil)
+;; (defvar nnhelplightning-pat nil)
 
 ;; environments
 (defvar nnhelplightning-environments
@@ -19,13 +19,15 @@
         (dev . ((instance-url . "https://api.dev.helplightning.net")
                (api-key . "eejxvctmn0hkbm1unzrhyk5nejnhzz09")))))
 
+(defvar nnhelplightning-instances (make-hash-table :test 'equal))
 
-(defvar nnhelplightning-token nil "Our authentication token")
-(defvar nnhelplightning-expiration nil "The expiration time of the token")
-(defvar nnhelplightning-group-map (make-hash-table :test 'equal) "Mapping of unique names to Helplightnig Workboxes")
-(defvar nnhelplightning-last-update nil "The last time we updated")
 
-(defvar nnhelplightning-status-string "")
+;; (defvar nnhelplightning-token nil "Our authentication token")
+;; (defvar nnhelplightning-expiration nil "The expiration time of the token")
+;; (defvar nnhelplightning-group-map (make-hash-table :test 'equal) "Mapping of unique names to Helplightnig Workboxes")
+;; (defvar nnhelplightning-last-update nil "The last time we updated")
+
+;; (defvar nnhelplightning-status-string "")
 
 ;;
 ;; gnus API
@@ -55,9 +57,9 @@
   it cumbersome to follow the request. If this is non-nil and not a
   number, do maximum fetches.
   "
-  (message "nnhelplightning-retrieve-headers")
-  (if-let ((workbox (gethash group nnhelplightning-group-map)))
-      (let* ((new-articles (fetch-all-workbox-articles (gethash 'id workbox)))
+  (message "nnhelplightning-retrieve-headers %s" server)
+  (if-let ((workbox (gethash group (get-instance-group-map server))))
+      (let* ((new-articles (fetch-all-workbox-articles server (gethash 'id workbox)))
             (ordered-articles (sort new-articles (lambda (a b) (< (alist-get 'id a) (alist-get 'id b))))))
         (with-current-buffer nntp-server-buffer
           (erase-buffer)
@@ -101,7 +103,7 @@
   If the server is opened already, this function should return a
   non-nil value. There should be no data returned.
   "
-  (message "nnhelplightning-open-server: Connecting to helplightning server %s defs: %s..." server defs)
+  (message "nnhelplightning-open-server: Connecting to helplightning server %s..." server)
 
   ;; look at the defs and pull out the environment
   ;; make sure it is valid, then set everything up
@@ -111,15 +113,19 @@
     (if env
         (let* ((env-info (cdr env))
                (url (alist-get 'instance-url env-info))
-               (api-key (alist-get 'api-key env-info)))
-          (setq nnhelplightning-instance-url url)
-          (setq nnhelplightning-api-key api-key)
-          (setq nnhelplightning-pat pat)
+               (api-key (alist-get 'api-key env-info))
+               (instance (or (get-instance server) (create-instance server))))
+          (message "setting up the instance")
+          (puthash server instance nnhelplightning-instances)
 
-          (connect-server))
+          (set-instance-url server url)
+          (set-instance-api-key server api-key)
+          (set-instance-pat server pat)
+          
+          (connect-server server))
       (error "Error: Environment '%s' not found!" environment))))
 
-(defun nnhelplightning-close-server ()
+(defun nnhelplightning-close-server (&optional server)
   "Close the connection to the helplightning backend server.
 
   Close connection to server and free all resources connected to
@@ -129,6 +135,7 @@
   There should be no data returned.
   "
   (message "nnhelplightning-close-server: Disconnecting from helplightning server...")
+  (remhash server nnhelplightning-instances)
   t) ;; Return t to indicate success
 
 (defun nnhelplightning-request-close ()
@@ -157,17 +164,17 @@
 
   ;; Check if we have a token AND if it hasn't 
   ;;  expired yet
-  (if (and nnhelplightning-token
-           (not (is-expired)))
+  (if (and (get-instance-token server)
+           (not (is-expired (get-instance-expiration server))))
       t nil))
 
-(defun nnhelplightning-status-message (&optional _server)
+(defun nnhelplightning-status-message (&optional server)
   "This function should return the last error message from server.
 
   There should be no data returned.
   "
-  (message "nnhelplightning-status-message")
-  nnhelplightning-status-string)
+  (message "nnhelplightning-status-message %s" server)
+  (get-instance-status-string server))
 
 (defun nnhelplightning-request-article (article &optional group server to-buffer)
   "Fetch the content of ARTICLE in GROUP from the nnhelplightning backend.
@@ -197,10 +204,10 @@
   (message "nnhelplightning-request-article: Fetching article %s (type: %s) from group %s on server %s"
            article (type-of article) group server)
   ;; Ensure ARTICLE is treated as a string, but convert to a number for alist lookup
-  (if (gethash group nnhelplightning-group-map)
-      (let* ((workbox (gethash group nnhelplightning-group-map))
+  (if (gethash group (get-instance-group-map server))
+      (let* ((workbox (gethash group (get-instance-group-map server)))
              (workbox-id (gethash 'id workbox))
-             (message (fetch-workbox-message workbox-id article))
+             (message (fetch-workbox-message server workbox-id article))
              (metadata (parse-json-body (alist-get 'metadata message)))
              (message-body (alist-get 'message metadata))
              (user (alist-get 'user message))
@@ -258,7 +265,7 @@
   (message "nnhelplightning-request-group: Checking if group exists: %s on server: %s" group server)
   ;; if group is a key in nnhelplightning-group-map
   ;; then return true, otherwise return nil
-  (if (gethash group nnhelplightning-group-map)
+  (if (gethash group (get-instance-group-map server))
       (progn
         (message "Group found: %s" group)
         t) ;; Return t if the group exists
@@ -275,7 +282,7 @@ a no-op on most back ends.
   (message "nnhelplightning-close-group")
   t)
 
-(defun nnhelplightning-request-list (&optional _server)
+(defun nnhelplightning-request-list (&optional server)
   "Populate the nntp-server-buffer with groups available on the
   nnhelplightning backend.
 
@@ -292,10 +299,10 @@ a no-op on most back ends.
   flag. If the group contains no articles, the lowest article
   number should be reported as 1 and the highest as 0.
   "
-  (message "nnhelplightning-request-list called")
-  (let ((workboxes (fetch-all-workboxes)))
+  (message "nnhelplightning-request-list called %s" server)
+  (let ((workboxes (fetch-all-workboxes server)))
     ;; store all the workboxes in a hashmap based upon a unique name
-    (populate-group-map workboxes)
+    (populate-group-map server workboxes)
     
     (with-current-buffer nntp-server-buffer
       (erase-buffer)
@@ -312,11 +319,11 @@ a no-op on most back ends.
                                    (or highest 0) ;; Default to 0 if highest is nil
                                    (or lowest 1) ;; Default to 1 if lowest is nil
                                    subscribed))))
-               nnhelplightning-group-map))
+               (get-instance-group-map server)))
 
     t)) ;; Return t to indicate success
 
-(defun nnhelplightning-request-post (&optional _server)
+(defun nnhelplightning-request-post (&optional server)
   "This function should post the current buffer. It might return
   whether the posting was successful or not, but that’s not
   required. If, for instance, the posting is done asynchronously,
@@ -350,12 +357,13 @@ a no-op on most back ends.
            (first-group (car groups)))
       (message "groups %s | body %s" first-group body)
 
-      (if-let ((workbox (gethash first-group nnhelplightning-group-map)))
-          (let* ((workbox-info (fetch-workbox-info (gethash 'id workbox)))
+      (if-let ((workbox (gethash first-group (get-instance-group-map server))))
+          (let* ((workbox-info (fetch-workbox-info server (gethash 'id workbox)))
                  (workbox-token (alist-get 'token workbox-info))
                  (name "Marcus")
                  (date (format-time-string "%Y-%m-%dT%H:%M:%SZ" (current-time) t))
-                 (url (format "%s/api/v1r1/workbox/messages" nnhelplightning-instance-url))
+                 (url (format "%s/api/v1r1/workbox/messages" (get-instance-url server)))
+                 (api-key (get-instance-api-key server))
                  (json-body (json-encode `(("username" . ,name)
                                    ("type" . "Text")
                                    ("version" . 2)
@@ -368,7 +376,7 @@ a no-op on most back ends.
               url
               :type "POST"
               :headers `(("Content-Type" . "application/json")
-                         ("x-helplightning-api-key" . ,nnhelplightning-api-key)
+                         ("x-helplightning-api-key" . ,api-key)
                          ("authorization" . ,workbox-token))
               :data json-body
               :parser 'json-read
@@ -402,14 +410,14 @@ a no-op on most back ends.
   nnchoke-request-list, while the latter is a buffer full of
   lines in the same format as nnchoke-request-group gives.
   "
-  (message "nnhelplightning-retrieve-groups called: %s" groups)
+  (message "nnhelplightning-retrieve-groups called on %s: %s" server groups)
   (let* ((deactivate-mark)
-         (updated-workboxes (fetch-all-workboxes-updated-since nnhelplightning-last-update)))
-    (update-group-map updated-workboxes)
+         (updated-workboxes (fetch-all-workboxes-updated-since server (get-instance-last-update server))))
+    (update-group-map server updated-workboxes)
     (with-current-buffer nntp-server-buffer
       (erase-buffer)
       (dolist (gname groups)
-        (if-let ((workbox (gethash gname nnhelplightning-group-map)))
+        (if-let ((workbox (gethash gname (get-instance-group-map server))))
             (let* ((unread (or (gethash 'unread-messages-count workbox) 0))
                    (min-article 1) ;; Placeholder for minimum article number
                    (max-article (or (gethash 'recent-message-id workbox) unread)))
@@ -490,7 +498,7 @@ a no-op on most back ends.
   There should be no result data from this function.
   "
   (message "nnhelplightning-set-mark")
-  (1 . 1))
+  ((1 . 1)))
 
 (defun nnhelplightning-request-update-mark (group article mark)
   "If the user tries to set a mark that the back end doesn’t like,
@@ -565,9 +573,9 @@ a no-op on most back ends.
   there can be many groups.
   "
   (message "nnhelplightning-request-newgroups")
-  (let ((workboxes (fetch-all-workboxes)))
+  (let ((workboxes (fetch-all-workboxes server)))
     ;; store all the workboxes in a hashmap based upon a unique name
-    (populate-group-map workboxes)
+    (populate-group-map server workboxes)
     (with-current-buffer nntp-server-buffer
       (erase-buffer)
       (insert "231 New newsgroups follow\n")
@@ -575,7 +583,7 @@ a no-op on most back ends.
                  (insert (format "%s %d %d y\n"
                                  name
                                  0 0)))
-               nnhelplightning-group-map))
+               (get-instance-group-map server)))
     t))
 
 ;; (defun nnhelplightning-request-create-group (group &optional server)
@@ -670,10 +678,10 @@ a no-op on most back ends.
 ;; Internal functions
 ;;
 
-(defun connect-server ()
-  (let ((url (format "%s/api/v1r1/auth/pat" nnhelplightning-instance-url))
-        (token nnhelplightning-pat)
-        (api-key nnhelplightning-api-key)
+(defun connect-server (server)
+  (let ((url (format "%s/api/v1r1/auth/pat" (get-instance-url server)))
+        (token (get-instance-pat server))
+        (api-key (get-instance-api-key server))
         (response-token nil))
     (request
       url
@@ -691,32 +699,34 @@ a no-op on most back ends.
                 (message "Error: %s" error-thrown))))
 
     ;; set the response-token
-    (setq nnhelplightning-token response-token)
-    (set-expiration))
+    (set-instance-token server response-token)
+    (set-expiration server))
   
   t) ;; Return t to indicate success
 
-(defun set-expiration ()
+(defun set-expiration (server)
   "Set `nnhelplightning-expiration` to the current time + 10 minutes."
-    (setq nnhelplightning-expiration (time-add (current-time) (seconds-to-time (* 10 60)))))
+    (set-instance-expiration server (time-add (current-time) (seconds-to-time (* 10 60)))))
 
-(defun is-expired ()
+(defun is-expired (exp)
   "Check if the current time is greater than `nnhelplightning-expiration`.
 Returns t if expired, nil otherwise."
-  (if nnhelplightning-expiration
-      (time-less-p nnhelplightning-expiration (current-time))
+  (if exp
+      (time-less-p exp (current-time))
     t)) ;; Treat as expired if expiration is nil
 
-(defun fetch-all-workboxes ()
+(defun fetch-all-workboxes (server)
   "Paginate through all the workboxes"
-  (fetch-workboxes nil nil)
+  (fetch-workboxes server nil nil)
   )
 
-(defun fetch-workboxes (after existing-workboxes)
+(defun fetch-workboxes (server after existing-workboxes)
   "Fetch workboxes recursively from the API, combining them into a single list.
 AFTER is the pagination cursor (or nil to start).
 EXISTING-WORKBOXES is the accumulated list of workboxes."
-  (let ((url (format "%s/api/v1r1/workboxes" nnhelplightning-instance-url))
+  (let ((url (format "%s/api/v1r1/workboxes" (get-instance-url server)))
+        (api-key (get-instance-api-key server))
+        (token (get-instance-token server))
         (new-workboxes nil)
         (next-after nil))
     ;; Make the GET request
@@ -724,8 +734,8 @@ EXISTING-WORKBOXES is the accumulated list of workboxes."
       url
       :type "GET"
       :headers `(("Content-Type" . "application/json")
-                 ("x-helplightning-api-key" . ,nnhelplightning-api-key)
-                 ("authorization" . ,nnhelplightning-token))
+                 ("x-helplightning-api-key" . ,api-key)
+                 ("authorization" . ,token))
       :params (let ((params '(("status" . "OPEN"))))
                 (if after
                     (cons `("after" . ,after) params)
@@ -743,22 +753,24 @@ EXISTING-WORKBOXES is the accumulated list of workboxes."
     (let ((combined-workboxes (append existing-workboxes new-workboxes)))
       ;; Recurse if there's a next page; otherwise return the combined list
       (if next-after
-          (fetch-workboxes next-after combined-workboxes)
+          (fetch-workboxes server next-after combined-workboxes)
                 combined-workboxes))))
 
-(defun fetch-all-workboxes-updated-since (timestamp)
+(defun fetch-all-workboxes-updated-since (server timestamp)
   "Paginate through all workboxes that have been updated
 after timestampe"
-  (setq nnhelplightning-last-update (current-time))
-  (fetch-workboxes-updated-since timestamp nil nil)
+  (set-instance-last-update server (current-time))
+  (fetch-workboxes-updated-since server timestamp nil nil)
   )
 
-(defun fetch-workboxes-updated-since (timestamp after existing-workboxes)
+(defun fetch-workboxes-updated-since (server timestamp after existing-workboxes)
   "Fetch workboxes recursively from the API, combining them into a single list.
 TIMESTAMP only fetch workboxes newer than timestamp
 AFTER is the pagination cursor (or nil to start).
 EXISTING-WORKBOXES is the accumulated list of workboxes."
-  (let ((url (format "%s/api/v1r1/workboxes" nnhelplightning-instance-url))
+  (let ((url (format "%s/api/v1r1/workboxes" (get-instance-url server)))
+        (api-key (get-instance-api-key server))
+        (token (get-instance-token server))
         (new-workboxes nil)
         (next-after nil))
     ;; Make the GET request
@@ -766,8 +778,8 @@ EXISTING-WORKBOXES is the accumulated list of workboxes."
       url
       :type "GET"
       :headers `(("Content-Type" . "application/json")
-                 ("x-helplightning-api-key" . ,nnhelplightning-api-key)
-                 ("authorization" . ,nnhelplightning-token))
+                 ("x-helplightning-api-key" . ,api-key)
+                 ("authorization" . ,token))
       :params (let ((params '(("status" . "OPEN"))))
                 (if after
                     (cons `("after" . ,after) params)
@@ -795,22 +807,23 @@ EXISTING-WORKBOXES is the accumulated list of workboxes."
     (let ((combined-workboxes (append existing-workboxes new-workboxes)))
       ;; Recurse if there's a next page; otherwise return the combined list
       (if next-after
-          (fetch-workboxes next-after combined-workboxes)
+          (fetch-workboxes-updated-since server timestamp next-after combined-workboxes)
                 combined-workboxes))))
 
 
-(defun fetch-workbox-recent-message-id (workbox-id)
+(defun fetch-workbox-recent-message-id (server workbox-id)
   "Fetch the recent messages for a workbox.
 WORKBOX-ID is the id for the workbox."
-  (let* ((workbox-info (fetch-workbox-info workbox-id))
+  (let* ((workbox-info (fetch-workbox-info server workbox-id))
          (workbox-token (alist-get 'token workbox-info))
-         (url (format "%s/api/v1r1/workbox/messages/recent_history" nnhelplightning-instance-url))
+         (url (format "%s/api/v1r1/workbox/messages/recent_history" (get-instance-url server)))
+         (api-key (get-instance-api-key server))
          (latest-message-id nil))
     (request
       url
       :type "GET"
       :headers `(("Content-Type" . "application/json")
-                 ("x-helplightning-api-key" . ,nnhelplightning-api-key)
+                 ("x-helplightning-api-key" . ,api-key)
                  ("authorization" . ,workbox-token))
       :params `(("limit" . "1"))
       :parser 'json-read
@@ -825,25 +838,26 @@ WORKBOX-ID is the id for the workbox."
     
     last-message-id))
 
-(defun fetch-workbox-unread-count (workbox-id)
+(defun fetch-workbox-unread-count (server workbox-id)
   "Fetch the recent messages for a workbox.
 WORKBOX-ID is the id for the workbox."
-  (let ((workbox-info (fetch-workbox-info workbox-id)))
+  (let ((workbox-info (fetch-workbox-info server workbox-id)))
     (alist-get 'unread_messages_count workbox-info)))
 
-(defun fetch-workbox-message (workbox-id message-id)
+(defun fetch-workbox-message (server workbox-id message-id)
   "Fetch a specific message
 WORKBOX-ID is the id for the workbox
 MESSAGE-ID is the id of the message."
-  (let* ((workbox-info (fetch-workbox-info workbox-id))
+  (let* ((workbox-info (fetch-workbox-info server workbox-id))
          (workbox-token (alist-get 'token workbox-info))
-         (url (format "%s/api/v1r1/workbox/messages/%s" nnhelplightning-instance-url message-id))
+         (url (format "%s/api/v1r1/workbox/messages/%s" (get-instance-url server) message-id))
+         (api-key (get-instance-api-key server))
          (message nil))
     (request
       url
       :type "GET"
       :headers `(("Content-Type" . "application/json")
-                 ("x-helplightning-api-key" . ,nnhelplightning-api-key)
+                 ("x-helplightning-api-key" . ,api-key)
                  ("authorization" . ,workbox-token))
       :params `(("limit" . "1"))
       :parser 'json-read
@@ -860,18 +874,19 @@ MESSAGE-ID is the id of the message."
     
     message))
 
-(defun fetch-all-workbox-articles (workbox-id)
-  (let* ((workbox-info (fetch-workbox-info workbox-id))
+(defun fetch-all-workbox-articles (server workbox-id)
+  (let* ((workbox-info (fetch-workbox-info server workbox-id))
          (workbox-token (alist-get 'token workbox-info)))
-    (fetch-workbox-articles workbox-token nil nil)))
+    (fetch-workbox-articles server workbox-token nil nil)))
 
-(defun fetch-workbox-articles (workbox-token after existing-messages)
+(defun fetch-workbox-articles (server workbox-token after existing-messages)
   "Fetch workbox messages recursively from the API, combining them into a
 single list.
 WORKBOX-TOKEN is the token of the workbox.
 AFTER is the pagination cursor (nil to start).
 EXISTING-MESSAGES is the accumulated list of messages."
-  (let ((url (format "%s/api/v1r1/workbox/messages" nnhelplightning-instance-url))
+  (let ((url (format "%s/api/v1r1/workbox/messages" (get-instance-url server)))
+        (api-key (get-instance-api-key server))
         (new-messages nil)
         (next-after nil))
     ;; Make the GET request
@@ -879,7 +894,7 @@ EXISTING-MESSAGES is the accumulated list of messages."
       url
       :type "GET"
       :headers `(("Content-Type" . "application/json")
-                 ("x-helplightning-api-key" . ,nnhelplightning-api-key)
+                 ("x-helplightning-api-key" . ,api-key)
                  ("authorization" . ,workbox-token))
       :params (let ((params '(())))
                 (if after
@@ -898,21 +913,23 @@ EXISTING-MESSAGES is the accumulated list of messages."
     (let ((combined-messages (append existing-messages new-messages)))
       ;; Recurse if there's a next page; otherwise return the combined list
       (if next-after
-          (fetch-workbox-articles workbox-token next-after combined-messages)
+          (fetch-workbox-articles server workbox-token next-after combined-messages)
                 combined-messages))))
 
-(defun fetch-workbox-info (workbox-id)
+(defun fetch-workbox-info (server workbox-id)
   "Fetch a workbox info based upon its id
 WORKBOX-ID is the id of the workbox to fetch."
-  (let ((url (format "%s/api/v1r1/workboxes/%d" nnhelplightning-instance-url workbox-id))
+  (let ((url (format "%s/api/v1r1/workboxes/%d" (get-instance-url server) workbox-id))
+        (api-key (get-instance-api-key server))
+        (token (get-instance-token server))
         (workbox nil))
     ;; Make the GET request
     (request
       url
       :type "GET"
       :headers `(("Content-Type" . "application/json")
-                 ("x-helplightning-api-key" . ,nnhelplightning-api-key)
-                 ("authorization" . ,nnhelplightning-token))
+                 ("x-helplightning-api-key" . ,api-key)
+                 ("authorization" . ,token))
       :parser 'json-read
       :sync t
       :success (cl-function
@@ -924,43 +941,46 @@ WORKBOX-ID is the id of the workbox to fetch."
     workbox))
 
 
-(defun populate-group-map (groups)
+(defun populate-group-map (server groups)
   "Populate `nnhelplightning-group-map` with metadata from GROUPS.
 Each entry in GROUPS should be the response from fetch-all-workboxes"
-  (clrhash nnhelplightning-group-map) ;; Clear the hashmap
+  (let ((group-map (make-hash-table :test 'equal)))
+    (dolist (group groups)
+      (let* ((id (alist-get 'id group))
+             (title (alist-get 'title group))
+             (unique-name (sanitize-group-name (format "%s-%s" id title)))
+             (unread-messages-count (alist-get 'unread_messages_count group))
+             (recent-message-id (fetch-workbox-recent-message-id server id))
+             (metadata (make-hash-table :test 'equal))) ;; Metadata map
+        ;; Populate the metadata hash map
+        (puthash 'id id metadata)
+        (puthash 'title title metadata)
+        (puthash 'unread-messages-count unread-messages-count metadata)
+        (puthash 'recent-message-id recent-message-id metadata)
+        
+        ;; Add to group map
+        (puthash unique-name metadata group-map)))
 
-  (dolist (group groups)
-    (let* ((id (alist-get 'id group))
-           (title (alist-get 'title group))
-           (unique-name (sanitize-group-name (format "%s-%s" id title)))
-           (unread-messages-count (alist-get 'unread_messages_count group))
-           (recent-message-id (fetch-workbox-recent-message-id id))
-           (metadata (make-hash-table :test 'equal))) ;; Metadata map
-      ;; Populate the metadata hash map
-      (puthash 'id id metadata)
-      (puthash 'title title metadata)
-      (puthash 'unread-messages-count unread-messages-count metadata)
-      (puthash 'recent-message-id recent-message-id metadata)
+    (set-instance-group-map server group-map)))
 
-      ;; Add to group map
-      (puthash unique-name metadata nnhelplightning-group-map))))
-
-(defun update-group-map (groups)
+(defun update-group-map (server groups)
   "Update `nnhelplightning-group-map`"
-  (dolist (group groups)
-    (let* ((id (alist-get 'id group))
-           (title (alist-get 'title group))
-           (unique-name (sanitize-group-name (format "%s-%s" id title)))
-           (unread-messages-count (alist-get 'unread_messages_count group))
-           (recent-message-id (fetch-workbox-recent-message-id id))
-           (metadata (or (gethash unique-name nnhelplightning-group-map) (make-has-table :test 'equal))))
-      ;; Update the metadata hash map
-      (puthash 'id id metadata)
-      (puthash 'title title metadata)
-      (puthash 'unread-message-count unread-messages-count metadata)
-      (puthash 'recent-message-id recent-message-id metadata)
+  (let ((group-map (get-instance-group-map server)))
+    (dolist (group groups)
+      (let* ((id (alist-get 'id group))
+             (title (alist-get 'title group))
+             (unique-name (sanitize-group-name (format "%s-%s" id title)))
+             (unread-messages-count (alist-get 'unread_messages_count group))
+             (recent-message-id (fetch-workbox-recent-message-id server id))
+             (metadata (or (gethash unique-name group-map) (make-hash-table :test 'equal))))
+        ;; Update the metadata hash map
+        (puthash 'id id metadata)
+        (puthash 'title title metadata)
+        (puthash 'unread-message-count unread-messages-count metadata)
+        (puthash 'recent-message-id recent-message-id metadata)
 
-      (puthash unique-name metadata nnhelplightning-group-map))))
+        (puthash unique-name metadata group-map)))
+    (set-instance-group-map server group-map)))
 
 
 (defun sanitize-group-name (name)
@@ -1029,6 +1049,113 @@ Assumes headers and body are separated by a blank line."
     (if (> (length parts) 1)
         (mapconcat 'identity (cdr parts) "\n\n") ; Rejoin in case of multiple parts
       "")))
+
+(defun create-instance (server)
+  (message "create-instance %s" server)
+  (let ((instance (make-hash-table :test 'equal)))
+    (puthash 'name server instance)
+    (puthash 'url nil instance)
+    (puthash 'api-key nil instance)
+    (puthash 'pat nil instance)
+    (puthash 'token nil instance)
+    (puthash 'expiration nil instance)
+    (puthash 'group-map (make-hash-table :test 'equal) instance)
+    (puthash 'last-update nil instance)
+    (puthash 'status-string "" instance)
+    instance))
+
+(defun get-instance (server)
+  (gethash server nnhelplightning-instances))
+
+(defun set-instance-url (server url)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+      (progn
+        (puthash 'url url instance)
+        (puthash server instance nnhelplightning-instances))
+    nil))
+
+(defun get-instance-url (server)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+    (gethash 'url instance)))
+
+(defun set-instance-api-key (server api-key)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+      (progn
+        (puthash 'api-key api-key instance)
+        (puthash server instance nnhelplightning-instances))
+    nil))
+
+(defun get-instance-api-key (server)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+    (gethash 'api-key instance)))
+
+(defun set-instance-pat (server pat)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+      (progn
+        (puthash 'pat pat instance)
+        (puthash server instance nnhelplightning-instances))
+    nil))
+
+(defun get-instance-pat (server)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+    (gethash 'pat instance)))
+
+(defun set-instance-token (server token)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+      (progn
+        (puthash 'token token instance)
+        (puthash server instance nnhelplightning-instances))
+    nil))
+
+(defun get-instance-token (server)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+    (gethash 'token instance)))
+
+(defun set-instance-expiration (server expiration)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+      (progn
+        (puthash 'expiration expiration instance)
+        (puthash server instance nnhelplightning-instances))
+    nil))
+
+(defun get-instance-expiration (server)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+    (gethash 'expiration instance)))
+
+(defun set-instance-group-map (server group-map)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+      (progn
+        (puthash 'group-map group-map instance)
+        (puthash server instance nnhelplightning-instances))
+    nil))
+
+(defun get-instance-group-map (server)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+    (gethash 'group-map instance)))
+
+(defun set-instance-last-update (server last-update)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+      (progn
+        (puthash 'last-update last-update instance)
+        (puthash server instance nnhelplightning-instances))
+    nil))
+
+(defun get-instance-last-update (server)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+    (gethash 'last-update instance)))
+
+(defun set-instance-status-string (server status-string)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+      (progn
+        (puthash 'status-string status-string instance)
+        (puthash server instance nnhelplightning-instances))
+    nil))
+
+(defun get-instance-status-string (server)
+  (if-let ((instance (gethash server nnhelplightning-instances)))
+      (gethash 'status-string instance)
+    ""))
+
 
 (provide 'nnhelplightning)
 
