@@ -3,6 +3,7 @@
 (require 'gnus)
 (require 'nnheader)
 (require 'request)
+(require 'seq)
 
 (gnus-declare-backend "nnhelplightning" 'post)
 
@@ -351,11 +352,12 @@ a no-op on most back ends.
            (references (mail-header-extract-field "references" parsed-headers))
            (date (mail-header-extract-field "date" parsed-headers))
            (body (mail-header-extract-body article))
+           (unfilled-body (unfill-text body))
            (groups (if newsgroups
                        (split-string newsgroups ",[ \t]*" t)
                      '("default.group")))
            (first-group (car groups)))
-      (message "groups %s | body %s" first-group body)
+      (message "groups %s | body %s" first-group unfilled-body)
 
       (if-let ((workbox (gethash first-group (get-instance-group-map server))))
           (let* ((workbox-info (fetch-workbox-info server (gethash 'id workbox)))
@@ -368,7 +370,7 @@ a no-op on most back ends.
                                    ("type" . "Text")
                                    ("version" . 2)
                                    ("sent_at" . ,date)
-                                   ("metadata" . (("message" . ,body)))
+                                   ("metadata" . (("message" . ,unfilled-body)))
                                    )))
                  )
             (message "json-body %s" json-body)
@@ -1156,6 +1158,58 @@ Assumes headers and body are separated by a blank line."
       (gethash 'status-string instance)
     ""))
 
+(require 'seq)
+
+(defun unfill-text (text &optional fill-column-v)
+  "Remove soft newlines (inserting spaces) in the given TEXT while preserving hard newlines.
+
+  This function processes the text paragraph by paragraph, working in reverse order,
+  and unwrapping lines that have been broken by auto-fill-mode.
+  
+  STRATEGY:
+  1. The input TEXT is split into paragraphs using double newlines (`\n\n`) as delimiters.
+  2. For each paragraph:
+     - The paragraph is split into lines using single newlines (`\n`).
+     - The lines are processed in reverse order.
+     - For each newline:
+       - The function calculates the combined length of the current line and the next word.
+       - If this length exceeds the `fill-column`, the newline is likely a soft newline inserted by `auto-fill-mode`, and it is replaced with a space.
+       - Otherwise, the newline is preserved as a hard newline (e.g., indicating the end of a list item or a user-entered line break).
+  3. After processing, the lines are rejoined with appropriate newlines to preserve paragraph boundaries.
+
+  Returns the processed TEXT with soft newlines removed and hard newlines preserved.
+
+  If FILL-COLUMN-V is not provided, it uses the current `fill-column` value."
+  (let* ((fill-column (or fill-column-v fill-column))  ;; Use provided fill-column or the global one
+         (paragraphs (split-string text "\n\n" t)))  ;; Split text into paragraphs by double newlines
+    (mapconcat
+     (lambda (paragraph)
+       (let* ((lines (split-string paragraph "\n" t))  ;; Split the paragraph into lines
+              (rev-lines (reverse lines))
+              result)
+         ;; Use reduce to process lines in reverse order and accumulate the result
+         (setq result (seq-reduce
+          (lambda (acc line)
+            (let* ((line-length (length line))
+                   (next-word-length (if (alist-get 'prev acc)
+                                         (length (car (split-string (alist-get 'prev acc))))
+                                       0))
+                   (merged-line (if (> (+ line-length next-word-length 1) fill-column)
+                                    (concat line " " (alist-get 'acc acc))  ;; Merge the lines
+                                  (if (= next-word-length 0)
+                                      (progn
+                                        line)
+                                    (progn
+                                      (concat line "\n" (alist-get 'acc acc)))))))  ;; Preserve newline
+
+              (list (cons 'prev line)  ;; Set 'prev' to the current line
+                    (cons 'acc merged-line))))  ;; Set 'acc' to the merged line
+          rev-lines  ;; Reverse the lines to process in reverse order
+          '((acc . "") (prev . nil))))  ;; Initial accumulator
+
+         (alist-get 'acc result)
+        ))
+     paragraphs "\n\n")))  ;; Preserve hard newlines between paragraphs
 
 (provide 'nnhelplightning)
 
