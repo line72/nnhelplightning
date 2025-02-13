@@ -500,7 +500,7 @@ a no-op on most back ends.
   There should be no result data from this function.
   "
   (message "nnhelplightning-set-mark")
-  ((1 . 1)))
+  nil)
 
 (defun nnhelplightning-request-update-mark (group article mark)
   "If the user tries to set a mark that the back end doesn’t like,
