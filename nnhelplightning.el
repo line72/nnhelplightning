@@ -7,6 +7,8 @@
 
 (gnus-declare-backend "nnhelplightning" 'post)
 
+(defvar nnhelplightning-version "1.0.0")
+
 ;; (defvar nnhelplightning-instance-url nil)
 ;; (defvar nnhelplightning-api-key nil)
 ;; (defvar nnhelplightning-pat nil)
