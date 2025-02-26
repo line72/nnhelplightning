@@ -70,14 +70,14 @@
             (let* ((article-id (alist-get 'id article))
                    (type (alist-get 'type article))
                    (metadata (parse-json-body (alist-get 'metadata article)))
-                   (message-body (alist-get 'message metadata))
+                   (message-body (parse-message type metadata))
                    (user (alist-get 'user article))
                    (from (alist-get 'name user))
                    (iso-date (alist-get 'sent_at article))
                    (date (iso8601-to-nov-date iso-date))
                    (message-id (alist-get 'uuid article))
                    (references nil))
-              (when (string= type "Text")
+              (when (is-supported-type type)
                 (let ((size (length message-body))
                       (lines (length (split-string message-body "\n"))))
 
@@ -211,8 +211,9 @@
       (let* ((workbox (gethash group (get-instance-group-map server)))
              (workbox-id (gethash 'id workbox))
              (message (fetch-workbox-message server workbox-id article))
+             (type (alist-get 'type message))
              (metadata (parse-json-body (alist-get 'metadata message)))
-             (message-body (alist-get 'message metadata))
+             (message-body (parse-message type metadata))
              (user (alist-get 'user message))
              (from (alist-get 'name user))
              (iso-date (alist-get 'sent_at message))
@@ -868,8 +869,9 @@ MESSAGE-ID is the id of the message."
       :sync t
       :success (cl-function
                 (lambda (&key data &allow-other-keys)
-                  (let* ((metadata (parse-json-body (alist-get 'metadata data)))
-                         (body (alist-get 'message metadata)))
+                  (let* ((type (alist-get 'type data))
+                         (metadata (parse-json-body (alist-get 'metadata data)))
+                         (body (parse-message type metadata)))
                     (message "Message Body: %s: %s" body metadata)
                     (setq message data))))
       :error (cl-function
@@ -1160,7 +1162,47 @@ Assumes headers and body are separated by a blank line."
       (gethash 'status-string instance)
     ""))
 
-(require 'seq)
+(defun is-supported-type (type)
+  (member type '("Audio" "Document" "Image" "QRMessage" "Text" "Video")))
+
+(defun parse-message (type metadata)
+  (pcase type
+    ("Audio" (parse-audio-message metadata))
+    ("Document" (parse-document-message metadata))
+    ("Image" (parse-image-message metadata))
+    ("QRMessage" (parse-qrmessage-message metadata))
+    ("Text" (parse-text-message metadata))
+    ("Video" (parse-video-message metadata))
+    (_ "")))
+
+(defun parse-audio-message (metadata)
+  (let ((url (alist-get 'url metadata))
+        (filename (alist-get 'filename metadata)))
+    (format "%s: %s" filename url)))
+
+(defun parse-document-message (metadata)
+  (let ((url (alist-get 'url metadata))
+        (filename (alist-get 'filename metadata)))
+    (format "%s: %s" filename url)))
+
+(defun parse-image-message (metadata)
+  (let ((url (alist-get 'url metadata))
+        (filename (alist-get 'filename metadata)))
+    (format "%s: %s" filename url)))
+
+(defun parse-qrmessage-message (metadata)
+  (let ((message (alist-get 'message metadata))
+        (title (alist-get 'title metadata)))
+    (format "%s: %s" title message)))
+
+(defun parse-text-message (metadata)
+  (let ((message (alist-get 'message metadata)))
+    message))
+
+(defun parse-video-message (metadata)
+  (let ((url (alist-get 'url metadata))
+        (filename (alist-get 'filename metadata)))
+    (format "%s: %s" filename url)))
 
 (defun unfill-text (text &optional fill-column-v)
   "Remove soft newlines (inserting spaces) in the given TEXT while preserving hard newlines.
