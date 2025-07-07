@@ -991,9 +991,9 @@ Each entry in GROUPS should be the response from fetch-all-workboxes"
 
 (defun sanitize-group-name (name)
   "Sanitize group NAME to ensure GNUS compatibility.
-Replaces spaces with underscores and removes special characters like #, :, and /."
+Replaces spaces with underscores and removes special characters like #, :, ), (, and /."
   (let* ((sanitized-name0 (replace-regexp-in-string "[[:space:]]+" "-" name))
-         (sanitized-name1 (replace-regexp-in-string "[#/:]" "-" sanitized-name0))
+         (sanitized-name1 (replace-regexp-in-string "[#/:()]" "-" sanitized-name0))
          (sanitized-name (replace-regexp-in-string "[^\x00-\x7F]" "" sanitized-name1)))
     sanitized-name))
 
