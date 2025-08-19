@@ -581,6 +581,10 @@ a no-op on most back ends.
   (let ((workboxes (fetch-all-workboxes server)))
     ;; store all the workboxes in a hashmap based upon a unique name
     (populate-group-map server workboxes)
+    ;; debug
+    (maphash (lambda (name workbox)
+               (message "group %s" name))
+             (get-instance-group-map server))
     (with-current-buffer nntp-server-buffer
       (erase-buffer)
       (insert "231 New newsgroups follow\n")
@@ -1040,7 +1044,7 @@ Each entry in GROUPS should be the response from fetch-all-workboxes"
   "Sanitize group NAME to ensure GNUS compatibility.
 Replaces spaces with underscores and removes special characters like #, :, ), (, and /."
   (let* ((sanitized-name0 (replace-regexp-in-string "[[:space:]]+" "-" name))
-         (sanitized-name1 (replace-regexp-in-string "[#/:()]" "-" sanitized-name0))
+         (sanitized-name1 (replace-regexp-in-string "[#/:()'\"]" "-" sanitized-name0))
          (sanitized-name (replace-regexp-in-string "[^\x00-\x7F]" "" sanitized-name1)))
     sanitized-name))
 
