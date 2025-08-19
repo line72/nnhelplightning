@@ -62,7 +62,7 @@
   "
   (message "nnhelplightning-retrieve-headers %s" server)
   (if-let ((workbox (gethash group (get-instance-group-map server))))
-      (let* ((new-articles (fetch-all-workbox-articles server (gethash 'id workbox)))
+      (let* ((new-articles (fetch-all-required-workbox-articles server (gethash 'id workbox) articles))
             (ordered-articles (sort new-articles (lambda (a b) (< (alist-get 'id a) (alist-get 'id b))))))
         (with-current-buffer nntp-server-buffer
           (erase-buffer)
@@ -920,6 +920,53 @@ EXISTING-MESSAGES is the accumulated list of messages."
       ;; Recurse if there's a next page; otherwise return the combined list
       (if next-after
           (fetch-workbox-articles server workbox-token next-after combined-messages)
+                combined-messages))))
+
+(defun fetch-all-required-workbox-articles (server workbox-id articles)
+  ;; We could fetch info about the list, but instead
+  ;;  we just start with the first (oldest) article, and fetch
+  ;;  everything newer than it.
+  (let* ((workbox-info (fetch-workbox-info server workbox-id))
+         (workbox-token (alist-get 'token workbox-info))
+         (message-id (car articles))
+         )
+    (fetch-newer-workbox-articles server workbox-token message-id nil)))
+
+(defun fetch-newer-workbox-articles (server workbox-token message-id existing-messages)
+  "Fetch workbox messages recursively from the API for the requested article ids.
+WORKBOX-TOKEN is the token of the workbox.
+MESSAGE-ID is the message to start at
+EXISTING-MESSAGES is the accumulated list of messages."
+  (message "fetch-newer-workbox-articles %s" message-id)
+  (let ((url (format "%s/api/v1r1/workbox/messages/history_by_direction" (get-instance-url server)))
+        (api-key (get-instance-api-key server))
+        (new-messages nil)
+        (next-after nil))
+    ;; Make the GET request
+    (request
+      url
+      :type "GET"
+      :headers `(("Content-Type" . "application/json")
+                 ("x-helplightning-api-key" . ,api-key)
+                 ("authorization" . ,workbox-token))
+      :params `(("message_id" . ,message-id)
+                ("direction" . "ASC"))
+      :parser 'json-read
+      :sync t
+      :success (cl-function
+                (lambda (&key data &allow-other-keys)
+                  (setq new-messages (seq-into data 'list)) ;; convert from a vector to a list
+                  (setq next-message-id (alist-get 'id (car (last new-messages))))
+                  ))
+      :error (cl-function
+              (lambda (&key error-thrown &allow-other-keys)
+                (error "Failed to fetch workbox messages: %s" error-thrown))))
+    ;; Combine the workboxes
+    (let ((combined-messages (append existing-messages new-messages)))
+      ;; Recurse if we got some messages AND next-message-id is not nil
+      (if (and (> (length new-messages) 0)
+               next-message-id)
+          (fetch-newer-workbox-articles server workbox-token next-message-id combined-messages)
                 combined-messages))))
 
 (defun fetch-workbox-info (server workbox-id)
